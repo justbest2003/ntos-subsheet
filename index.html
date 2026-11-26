@@ -34,6 +34,7 @@ td.l{text-align:left}
 th{position:sticky;top:0;background:var(--card);z-index:1}
 td.b{font-weight:700}
 label{cursor:pointer}
+input[type=text]{font:inherit;width:70px;padding:4px 8px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx)}
 .hide{display:none}
 </style>
 </head>
@@ -52,12 +53,21 @@ label{cursor:pointer}
 <div id="result" class="card hide">
   <div class="chips" id="chips"></div>
   <div id="warn" class="msg warn hide"></div>
+  <div id="mergeNote" class="msg warn hide"></div>
   <div class="row" style="margin-bottom:12px">
+    <span>รูปแบบไฟล์:</span>
+    <label><input type="radio" name="fmt" value="daily" checked> รายวัน</label>
+    <label><input type="radio" name="fmt" value="sum"> สรุปรวมวันที่ (แบบนำเข้า)</label>
+    <span style="flex:1"></span>
+    <button id="dl">ดาวน์โหลด Excel</button>
+  </div>
+  <div class="row" id="optDaily" style="margin-bottom:12px">
     <span>เรียงตาม:</span>
     <label><input type="radio" name="sort" value="date" checked> วันที่</label>
     <label><input type="radio" name="sort" value="file"> ลำดับเดิมในใบสรุปการลา</label>
-    <span style="flex:1"></span>
-    <button id="dl">ดาวน์โหลด Excel</button>
+  </div>
+  <div class="row hide" id="optSum" style="margin-bottom:12px">
+    <span>เวลามา</span><input type="text" id="tIn" value="08:00"> <span>เวลากลับ</span><input type="text" id="tOut" value="17:00">
   </div>
   <div class="tw"><table id="tbl"></table></div>
 </div>
@@ -118,6 +128,7 @@ function cv(cell) {
   }
   return v;
 }
+function nz(v) { return txt(v).replace(/\s/g, ''); }
 function txt(v) { return v == null ? '' : String(v).replace(/\s+/g, ' ').trim(); }
 function dkey(d) { return d.toISOString().slice(0, 10); }
 function fmtId(s) {
@@ -133,7 +144,7 @@ function idOk(s) {
 }
 function findHeaderRow(ws, label) {
   for (var r = 1; r <= Math.min(ws.rowCount, 15); r++) {
-    for (var c = 1; c <= 12; c++) if (txt(cv(ws.getCell(r, c))) === label) return r;
+    for (var c = 1; c <= 12; c++) if (nz(cv(ws.getCell(r, c))) === nz(label)) return r;
   }
   return 0;
 }
@@ -153,19 +164,27 @@ function buildRows(wb) {
   workSheets.forEach(function (ws) {
     var h = findHeaderRow(ws, 'ชื่อ - นามสกุล');
     if (!h) { warnings.push('Sheet "' + ws.name.trim() + '": ไม่พบหัวตาราง'); return; }
-    var col = {};
-    for (var c = 1; c <= 15; c++) col[txt(cv(ws.getCell(h, c)))] = c;
+    var hdr = {};
+    for (var c = 1; c <= Math.max(ws.columnCount, 30); c++) { var k = nz(cv(ws.getCell(h, c))); if (k && !hdr[k]) hdr[k] = c; }
+    var ALIAS = { date: ['ว/ด/ป', 'วันที่', 'วดป'], name: ['ชื่อ-นามสกุล', 'ชื่อสกุล', 'ชื่อ'], id: ['เลขประจำตัวประชาชน', 'เลขบัตรประชาชน', 'บัตรประชาชน', 'เลขประชาชน'], contract: ['เลขที่สัญญา', 'สัญญา'], dept: ['ส่วนงาน', 'สังกัด', 'สังกัดแทน'], qual: ['คุณวุฒิ', 'วุฒิ', 'วุฒิที่แทน'], wage: ['ค่าจ้าง', 'ค่าจ้างวันละ'] };
+    var col = {}, missing = [];
+    Object.keys(ALIAS).forEach(function (key) {
+      var f = ALIAS[key].map(nz).filter(function (a) { return hdr[a]; })[0];
+      if (f) col[key] = hdr[f]; else if (key !== 'id') missing.push(ALIAS[key][0]);
+    });
+    if (!col.id) warnings.push('Sheet "' + ws.name.trim() + '" ไม่มีคอลัมน์เลขบัตรประชาชน จึงเว้นช่องบัตรประชาชนไว้ว่าง');
+    if (missing.length) throw new Error('Sheet "' + ws.name.trim() + '" ไม่พบหัวคอลัมน์: ' + missing.join(', ') + ' (หัวตารางอยู่แถว ' + h + ')');
     for (var r = h + 1; r <= ws.rowCount; r++) {
-      var d = cv(ws.getCell(r, col['ว/ด/ป'])), name = txt(cv(ws.getCell(r, col['ชื่อ - นามสกุล'])));
+      var d = cv(ws.getCell(r, col.date)), name = txt(cv(ws.getCell(r, col.name)));
       if (!(d instanceof Date) || !name) continue;
       var rec = {
-        name: name, id: txt(cv(ws.getCell(r, col['เลขประจำตัวประชาชน']))).replace(/\D/g, ''),
-        contract: txt(cv(ws.getCell(r, col['เลขที่สัญญา']))), dept: txt(cv(ws.getCell(r, col['ส่วนงาน']))),
-        qual: txt(cv(ws.getCell(r, col['คุณวุฒิ']))), wage: cv(ws.getCell(r, col['ค่าจ้าง']))
+        name: name, id: col.id ? txt(cv(ws.getCell(r, col.id))).replace(/\D/g, '') : '',
+        contract: txt(cv(ws.getCell(r, col.contract))), dept: txt(cv(ws.getCell(r, col.dept))),
+        qual: txt(cv(ws.getCell(r, col.qual))), wage: cv(ws.getCell(r, col.wage))
       };
       byNameDate[name + '|' + dkey(d)] = rec;
       (byName[name] = byName[name] || []).push(rec);
-      (idsByName[name] = idsByName[name] || {})[rec.id] = 1;
+      if (rec.id) (idsByName[name] = idsByName[name] || {})[rec.id] = 1;
     }
   });
   // บัตรประชาชนที่คนเดียวกันพิมพ์ไม่เท่ากัน -> ใช้ค่าที่ครบ 13 หลักและเลขตรวจสอบถูก
@@ -202,7 +221,7 @@ function buildRows(wb) {
       if (rec) { o.contract = rec.contract; o.id = bestId[name] || rec.id; }
       else {
         var any = byName[name];
-        if (any) { o.contract = any[0].contract; o.id = bestId[name]; }
+        if (any) { o.contract = any[0].contract; o.id = bestId[name] || ''; }
         warnings.push('ไม่พบ "' + name + '" วันที่ ' + dkey(d) + ' ในชีต "ครั้งที่" (' + (any ? 'ใช้เลขสัญญา/บัตรจากวันอื่น' : 'เลขบัตร/สัญญาจะว่าง') + ')');
       }
       sheetRows.push(o);
@@ -258,7 +277,121 @@ function buildWorkbook(ExcelJS, rows) {
   return wb;
 }
 
-if (typeof module !== 'undefined') module.exports = { buildRows: buildRows, sortRows: sortRows, buildWorkbook: buildWorkbook, fmtId: fmtId, HEAD: HEAD };
+
+/* ===== รูปแบบที่ 2: สรุปรวมวันที่ (1 แถว = ผู้ทดแทน + ผู้ขาด + ประเภทลา ต่อเดือน) ===== */
+var TH_MON = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+var LEAVE_MAP = {}; // ใส่ชื่อประเภทลาที่ต้องเปลี่ยนชื่อได้ เช่น { 'ชื่อเดิม': 'ชื่อใหม่' }
+var HEAD2 = ['ลำดับ', 'เดือน ปี', 'สังกัดแทน', 'ชื่อ-นามสกุล (ผู้มาทดแทน)', 'เลขประจำตัวประชาชน', 'วุฒิที่แทน', 'วันที่มาทดแทน', 'เวลามา', 'เวลากลับ', 'รหัสสัญญา', 'เลขที่สัญญา', 'พนักงานที่ขาดงาน', 'รหัสพนักงาน (ที่ขาดงาน)', 'เลขประจำตัวประชาชน (ที่ขาดงาน)', 'ประเภทการลา', 'จำนวนวันแทน', 'ค่าจ้างวันละ', 'ยอดรวม (บาท)', 'หมายเหตุ'];
+function beYear(y) { return y < 100 ? y + 2500 : (y >= 1900 && y < 2200 ? y + 543 : y); }
+function cleanQual(q) { return txt(q); }
+function fmtDays(ds) {
+  var out = [], i = 0;
+  while (i < ds.length) {
+    var j = i;
+    while (j + 1 < ds.length && ds[j + 1] === ds[j] + 1) j++;
+    out.push(j > i ? ds[i] + '-' + ds[j] : String(ds[i]));
+    i = j + 1;
+  }
+  return out.join(', ');
+}
+function nk(s) { return String(s || '').replace(/[\s\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, ''); }
+function pickVar(v) { var best = null; Object.keys(v).forEach(function (k) { if (best === null || v[k] > v[best]) best = k; }); return best; }
+function groupRows(rows) {
+  var map = {}, list = [];
+  rows.forEach(function (o) {
+    var leave = LEAVE_MAP[o.leave] || o.leave, q = cleanQual(o.qual);
+    var y = beYear(o.date.getUTCFullYear()), m = o.date.getUTCMonth();
+    var key = [y, m, o.dept, nk(o.name), nk(o.absent), leave, o.contract, o.wage, q].join('|');
+    var g = map[key];
+    if (!g) {
+      g = map[key] = { y: y, m: m, dept: o.dept, name: o.name, id: '', qual: q, absent: o.absent, leave: leave, contract: o.contract, wage: o.wage, days: 0, dates: [], notes: [], nameVar: {}, absVar: {} };
+      list.push(g);
+    }
+    g.nameVar[o.name] = (g.nameVar[o.name] || 0) + 1;
+    g.absVar[o.absent] = (g.absVar[o.absent] || 0) + 1;
+    g.days += o.days;
+    g.dates.push(o.date.getUTCDate());
+    if (!g.id && o.id) g.id = String(o.id).replace(/\D/g, '');
+    if (o.note && g.notes.indexOf(o.note) < 0) g.notes.push(o.note);
+  });
+  var col = new Intl.Collator('th'), notes = [];
+  list.forEach(function (g) {
+    [['nameVar', 'name', 'ผู้ทดแทน'], ['absVar', 'absent', 'ผู้ขาดงาน']].forEach(function (f) {
+      var names = Object.keys(g[f[0]]);
+      if (names.length > 1) {
+        g[f[1]] = pickVar(g[f[0]]);
+        notes.push(f[2] + ' ' + names.map(function (n) { return '"' + n + '"'; }).join(' / ') + ' → รวมเป็น "' + g[f[1]] + '"');
+      }
+    });
+    g.dates = g.dates.sort(function (a, b) { return a - b; }).filter(function (d, i, a) { return !i || d !== a[i - 1]; });
+    g.dateText = fmtDays(g.dates);
+    g.note = g.notes.join(', ');
+    g.monthText = TH_MON[g.m] + ' ' + g.y;
+  });
+  list.sort(function (a, b) {
+    return ((a.y * 12 + a.m) - (b.y * 12 + b.m)) || col.compare(a.dept, b.dept) || col.compare(a.name, b.name) || col.compare(a.absent, b.absent) || (a.dates[0] - b.dates[0]);
+  });
+  list.notes = notes;
+  return list;
+}
+function buildWorkbook2(ExcelJS, groups, opt) {
+  opt = opt || {};
+  var wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('สรุป');
+  ws.columns = [8, 12, 14, 30, 20, 11, 22, 10, 10, 12, 26, 30, 14, 20, 24, 12, 12, 14, 22].map(function (w) { return { width: w }; });
+  var hr = ws.addRow(HEAD2);
+  hr.eachCell(function (c) {
+    c.font = { name: 'Tahoma', size: 11, bold: true };
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+  });
+  hr.height = 32;
+  groups.forEach(function (g, i) {
+    var r = i + 2;
+    var row = ws.addRow(['', g.monthText, g.dept, g.name, g.id, g.qual, g.dateText, opt.timeIn || '08:00', opt.timeOut || '17:00', '', g.contract, g.absent, '', '', g.leave, g.days, g.wage, { formula: 'P' + r + '*Q' + r, result: g.days * g.wage }, g.note]);
+    row.eachCell({ includeEmpty: true }, function (c) { c.font = { name: 'Tahoma', size: 11 }; c.alignment = { vertical: 'middle' }; });
+    row.getCell(5).numFmt = '@';
+    row.getCell(17).numFmt = '#,##0.00';
+    row.getCell(18).numFmt = '#,##0.00';
+  });
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  return wb;
+}
+
+/* อ่านไฟล์รูปแบบรายวัน (ผลลัพธ์จากแอปนี้) กลับมาเป็น rows */
+function readDaily(wb) {
+  var ALIAS = { dept: ['สังกัดแทน'], name: ['ชื่อ-สกุลที่ทดแทน', 'ชื่อ-นามสกุลที่ทดแทน'], id: ['บัตรประชาชน', 'เลขประจำตัวประชาชน'], qual: ['วุฒิที่แทน'], date: ['วันที่มาทดแทน'], absent: ['คนที่ไม่มาปฏิบัติงาน'], leave: ['ประเภทการลา'], contract: ['เลขที่สัญญา'], days: ['จำนวนวันแทน'], wage: ['ค่าจ้างวันละ'], note: ['หมายเหตุ'] };
+  for (var s = 0; s < wb.worksheets.length; s++) {
+    var ws = wb.worksheets[s], h = findHeaderRow(ws, 'คนที่ไม่มาปฏิบัติงาน');
+    if (!h) continue;
+    var hdr = {};
+    for (var c = 1; c <= Math.max(ws.columnCount, 20); c++) { var k = nz(cv(ws.getCell(h, c))); if (k && !hdr[k]) hdr[k] = c; }
+    var col = {}, missing = [];
+    Object.keys(ALIAS).forEach(function (key) {
+      var f = ALIAS[key].map(nz).filter(function (a) { return hdr[a]; })[0];
+      if (f) col[key] = hdr[f]; else if (['id', 'days', 'note'].indexOf(key) < 0) missing.push(ALIAS[key][0]);
+    });
+    if (missing.length) throw new Error('Sheet "' + ws.name.trim() + '" ไม่พบหัวคอลัมน์: ' + missing.join(', '));
+    var rows = [], warnings = [];
+    for (var r = h + 1; r <= ws.rowCount; r++) {
+      var d = cv(ws.getCell(r, col.date)), name = txt(cv(ws.getCell(r, col.name)));
+      if (!name) continue;
+      if (!(d instanceof Date)) { warnings.push('แถว ' + r + ' (' + name + '): วันที่ไม่ใช่รูปแบบวันที่ของ Excel จึงข้ามแถวนี้'); continue; }
+      var w = cv(ws.getCell(r, col.wage)), dy = col.days ? cv(ws.getCell(r, col.days)) : 1;
+      rows.push({
+        seq: rows.length, sheet: ws.name.trim(), dept: txt(cv(ws.getCell(r, col.dept))), name: name,
+        id: col.id ? txt(cv(ws.getCell(r, col.id))).replace(/\D/g, '') : '', qual: txt(cv(ws.getCell(r, col.qual))), date: d,
+        absent: txt(cv(ws.getCell(r, col.absent))), leave: txt(cv(ws.getCell(r, col.leave))),
+        contract: txt(cv(ws.getCell(r, col.contract))), days: typeof dy === 'number' ? dy : 1,
+        wage: typeof w === 'number' ? w : (parseFloat(String(w).replace(/,/g, '')) || 0),
+        note: col.note ? txt(cv(ws.getCell(r, col.note))) : ''
+      });
+    }
+    return { rows: rows, warnings: warnings, leaveSheets: [], workSheets: [], daily: true };
+  }
+  return null;
+}
+
+if (typeof module !== 'undefined') module.exports = { readDaily: readDaily, groupRows: groupRows, buildWorkbook2: buildWorkbook2, HEAD2: HEAD2, cleanQual: cleanQual, buildRows: buildRows, sortRows: sortRows, buildWorkbook: buildWorkbook, fmtId: fmtId, HEAD: HEAD };
 </script>
 <script>
 var $=function(i){return document.getElementById(i)};
@@ -269,14 +402,31 @@ function esc(s){return String(s).replace(/[&<>]/g,function(c){return{'&':'&amp;'
 function money(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function showErr(m){$('err').textContent=m;$('err').classList.remove('hide');$('result').classList.add('hide')}
 function sorted(){return sortRows(state.rows,document.querySelector('input[name=sort]:checked').value)}
+function fmt(){return document.querySelector('input[name=fmt]:checked').value}
+function chips(a){$('chips').innerHTML=a.map(function(x){return'<div class="chip">'+x[0]+'<b>'+x[1]+'</b></div>'}).join('')}
 function render(){
-  var rows=sorted(),total=rows.reduce(function(s,o){return s+o.days*o.wage},0);
-  var h='<tr>'+HEAD.map(function(t){return'<th>'+t+'</th>'}).join('')+'</tr>';
-  rows.forEach(function(o){
-    h+='<tr><td>'+esc(o.dept)+'</td><td class="l">'+esc(o.name)+'</td><td>'+esc(o.id?fmtId(o.id):'')+'</td><td class="b">'+esc(o.qual)+'</td><td>'+fd(o.date)+'</td><td class="l b">'+esc(o.absent)+'</td><td class="b">'+esc(o.leave)+'</td><td class="l">'+esc(o.contract)+'</td><td>'+o.days+'</td><td>'+money(o.wage)+'</td><td>'+money(o.days*o.wage)+'</td><td class="b">'+esc(o.note)+'</td></tr>';
-  });
+  var sum=fmt()==='sum',h='';
+  $('mergeNote').classList.add('hide');
+  $('optDaily').classList.toggle('hide',sum);$('optSum').classList.toggle('hide',!sum);
+  var src=state.nWork?[['Sheet ใบสรุปการลา',state.nLeave],['Sheet ครั้งที่',state.nWork]]:[['ไฟล์ต้นทาง','รายวัน']];
+  if(sum){
+    var g=groupRows(state.rows),tot=g.reduce(function(s,x){return s+x.days*x.wage},0),dd=g.reduce(function(s,x){return s+x.days},0);
+    h='<tr>'+HEAD2.map(function(t){return'<th>'+t+'</th>'}).join('')+'</tr>';
+    g.forEach(function(x){
+      var v=['',x.monthText,x.dept,x.name,x.id,x.qual,x.dateText,$('tIn').value,$('tOut').value,'',x.contract,x.absent,'','',x.leave,x.days,money(x.wage),money(x.days*x.wage),x.note];
+      h+='<tr>'+v.map(function(c){return'<td>'+esc(c)+'</td>'}).join('')+'</tr>';
+    });
+    if(g.notes.length){$('mergeNote').innerHTML='<b>รวมชื่อที่สะกดต่างกัน ('+g.notes.length+')</b><ul>'+g.notes.map(function(w){return'<li>'+esc(w)+'</li>'}).join('')+'</ul>';$('mergeNote').classList.remove('hide')}
+    chips([['จำนวนแถว',g.length],['จำนวนวันรวม',dd],['ยอดรวม (บาท)',money(tot)]].concat(src));
+  }else{
+    var rows=sorted(),total=rows.reduce(function(s,o){return s+o.days*o.wage},0);
+    h='<tr>'+HEAD.map(function(t){return'<th>'+t+'</th>'}).join('')+'</tr>';
+    rows.forEach(function(o){
+      h+='<tr><td>'+esc(o.dept)+'</td><td class="l">'+esc(o.name)+'</td><td>'+esc(o.id?fmtId(o.id):'')+'</td><td class="b">'+esc(o.qual)+'</td><td>'+fd(o.date)+'</td><td class="l b">'+esc(o.absent)+'</td><td class="b">'+esc(o.leave)+'</td><td class="l">'+esc(o.contract)+'</td><td>'+o.days+'</td><td>'+money(o.wage)+'</td><td>'+money(o.days*o.wage)+'</td><td class="b">'+esc(o.note)+'</td></tr>';
+    });
+    chips([['จำนวนแถว',rows.length],['ยอดรวม (บาท)',money(total)]].concat(src));
+  }
   $('tbl').innerHTML=h;
-  $('chips').innerHTML='<div class="chip">จำนวนแถว<b>'+rows.length+'</b></div><div class="chip">ยอดรวม (บาท)<b>'+money(total)+'</b></div><div class="chip">Sheet ใบสรุปการลา<b>'+state.nLeave+'</b></div><div class="chip">Sheet ครั้งที่<b>'+state.nWork+'</b></div>';
 }
 async function handle(f){
   $('err').classList.add('hide');
@@ -285,7 +435,7 @@ async function handle(f){
   try{
     var wb=new ExcelJS.Workbook();
     await wb.xlsx.load(await f.arrayBuffer());
-    var r=buildRows(wb);
+    var r=readDaily(wb)||buildRows(wb);
     state.rows=r.rows;state.nLeave=r.leaveSheets.length;state.nWork=r.workSheets.length;
     if(!r.rows.length)throw new Error('ไม่พบแถวข้อมูลวันที่มาทดแทนในใบสรุปการลา');
     if(r.warnings.length){$('warn').innerHTML='<b>ข้อสังเกต ('+r.warnings.length+')</b><ul>'+r.warnings.map(function(w){return'<li>'+esc(w)+'</li>'}).join('')+'</ul>';$('warn').classList.remove('hide')}
@@ -299,13 +449,15 @@ $('file').onchange=function(e){if(e.target.files[0])handle(e.target.files[0])};
 ['dragover','dragenter'].forEach(function(t){$('drop').addEventListener(t,function(e){e.preventDefault();$('drop').classList.add('over')})});
 ['dragleave','drop'].forEach(function(t){$('drop').addEventListener(t,function(e){e.preventDefault();$('drop').classList.remove('over')})});
 $('drop').addEventListener('drop',function(e){var f=e.dataTransfer.files[0];if(f)handle(f)});
-document.querySelectorAll('input[name=sort]').forEach(function(r){r.onchange=function(){if(state.rows)render()}});
+document.querySelectorAll('input[name=sort],input[name=fmt]').forEach(function(r){r.onchange=function(){if(state.rows)render()}});
+['tIn','tOut'].forEach(function(i){$(i).oninput=function(){if(state.rows)render()}});
 $('dl').onclick=async function(){
-  var wb=buildWorkbook(ExcelJS,sorted());
+  var sum=fmt()==='sum';
+  var wb=sum?buildWorkbook2(ExcelJS,groupRows(state.rows),{timeIn:$('tIn').value,timeOut:$('tOut').value}):buildWorkbook(ExcelJS,sorted());
   var buf=await wb.xlsx.writeBuffer();
   var a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
-  a.download=state.name+'_สรุปรายชื่อหน่วยแทน.xlsx';
+  a.download=state.name.replace(/_สรุป.*$/,'')+(sum?'_แบบสรุปรวมวันที่.xlsx':'_สรุปรายชื่อหน่วยแทน.xlsx');
   document.body.appendChild(a);a.click();a.remove();
 };
 </script>
